@@ -8,7 +8,7 @@ import pandas as pd
 from torch.utils.data import DataLoader
 
 from MODELS.model_mlp import *
-
+from src.data_loader import *
 
 
 parser = argparse.ArgumentParser(description='Clinical-data-based-model Training')
@@ -210,17 +210,6 @@ def accuracy(output, target, topk=(1,)):
     return res
 
 
-class TensorData(Dataset):
-    def __init__(self, x_data, y_data):
-        self.x_data = torch.tensor(x_data, dtype=torch.float32)
-        self.y_data = torch.tensor(y_data)
-        self.len = self.y_data.shape[0]
-
-    def __getitem__(self, index):
-        return self.x_data[index], self.y_data[index]
-
-    def __len__(self):
-        return self.len
 
 
 if __name__ == '__main__':

@@ -3,26 +3,25 @@ import os
 import shutil
 import time
 import random
-import numpy as np
 import pickle
 
-import torch
-import torch.nn as nn
-import torch.nn.parallel
-import torch.backends.cudnn as cudnn
-import torch.optim
-import torch.utils.data
-from torch.utils.data import DataLoader, SubsetRandomSampler, ConcatDataset
-import torchvision.transforms as transforms
-import torchvision.datasets as datasets
-import torchvision.models as models
-
-from sklearn.model_selection import StratifiedKFold
+import numpy as np
+from PIL import ImageFile
 
 import torch.onnx
+import torch.optim
+import torch.utils.data
+import torch.nn.parallel
+import torch.backends.cudnn as cudnn
+import torchvision.transforms as transforms
 
+import torchvision.models as models
+import torchvision.datasets as datasets
+from torch.utils.data import DataLoader, SubsetRandomSampler, ConcatDataset
+
+from sklearn.model_selection import StratifiedKFold
 from MODELS.model_resnet import *
-from PIL import ImageFile
+
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 model_names = sorted(name for name in models.__dict__

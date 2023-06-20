@@ -1,29 +1,24 @@
 import argparse
-import os
 import shutil
 import time
 import random
-import numpy as np
-import pandas as pd
 import pickle
 
-import torch
-import torch.nn as nn
-import torch.nn.parallel
-import torch.backends.cudnn as cudnn
+from PIL import ImageFile
+
+import torch.onnx
 import torch.optim
 import torch.utils.data
-from torch.utils.data import ConcatDataset
+import torch.nn.parallel
+import torch.backends.cudnn as cudnn
 import torchvision.transforms as transforms
 
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 
-import torch.onnx
-
 from MODELS.concatenate import *
-from PIL import Image
-from PIL import ImageFile
+from src.preprocessing import *
+from src.data_loader import *
 
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -77,15 +72,21 @@ def main():
 
     # Stratified k-fold cross-validation
     Y = all_df['Cls']
-
     splits = StratifiedKFold(n_splits=args.kfold, shuffle=True, random_state=args.seed)
     scaler = StandardScaler()
-    foldperf={}
 
+    foldperf = {}
     for fold, (train_idx, val_idx) in enumerate(splits.split(np.arange(len(all_df)), Y)):
         print('** Fold {} **'.format(fold + 1))
 
-        scaled_train_df, scaled_valid_df = scaled_datasets(all_df, train_idx, val_idx, scaler)
+        re_train_df = all_df.loc[train_idx].reset_index(drop=True)
+        re_valid_df = all_df.loc[val_idx].reset_index(drop=True)
+
+        scaled_train_df, scaled_valid_df = scaled_datasets(re_train_df,
+                                                           re_valid_df,
+                                                           scaler,
+                                                           continuous_feat=['age', 'BMI', 'Delta_date'])
+
         fold_train_dataset = CombineDataset(scaled_train_df, 'img_name', 'Cls', all_img_dir, transform=tf)
         fold_val_dataset = CombineDataset(scaled_valid_df, 'img_name', 'Cls', all_img_dir, transform=tf)
 
@@ -94,7 +95,6 @@ def main():
 
         # create model
         model = TwoInputNet(4, args.depth, args.att_type)
-
         model = torch.nn.DataParallel(model, device_ids=list(range(args.ngpu)))
         model = model.cuda()
 
@@ -288,106 +288,6 @@ def accuracy(output, target, topk=(1,)):
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
 
-
-class CombineDataset(Dataset):
-    def __init__(self, frame, id_col, label_name, path_imgs, transform=None):
-        """
-        Args:
-            frame (pd.DataFrame): Frame with the tabular data.
-            id_col (string): Name of the column that connects image to tabular data
-            label_name (string): Name of the column with the label to be predicted
-            path_imgs (string): path to the folder where the images are.
-            transform (callable, optional): Optional transform to be applied
-                on a sample, you need to implement a transform to use this.
-        """
-        self.frame = frame
-        self.id_col = id_col
-        self.label_name = label_name
-        self.path_imgs = path_imgs
-        self.transform = transform
-
-    def __len__(self):
-        return (self.frame.shape[0])
-
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-
-        # get images
-        img_name = self.frame[self.id_col].iloc[idx]
-        path = os.path.join(self.path_imgs, img_name)              # train_dataset = CombineDataset(train_df, 'img_name', 'Cls', train_img_dir, transform=tf)
-        image = Image.open(path)
-        if self.transform:
-            image = self.transform(image)
-
-        # get features
-        feats = [feat for feat in self.frame.columns if feat not in [self.label_name, self.id_col]]
-        feats = np.array(self.frame[feats].iloc[idx])
-        feats = torch.from_numpy(feats.astype(np.float32))
-
-        # get label
-        label = np.array(self.frame[self.label_name].iloc[idx])
-        label = torch.from_numpy(label.astype(np.int64))
-
-        return image, feats, label
-
-def scaled_datasets(df, train_idx, val_idx, scaler):
-    train = df.loc[train_idx].reset_index(drop=True)
-    valid = df.loc[val_idx].reset_index(drop=True)
-
-    scaled_train, scaled_valid = scaling(train, valid, scaler)   # scaler = StandardScaler()
-
-    scaled_train_df = pd.concat([train, scaled_train], axis=1)
-    scaled_train_df = scaled_train_df.drop(['age', 'BMI', 'Delta_date'], axis=1)
-
-    scaled_valid_df = pd.concat([valid, scaled_valid], axis=1)
-    scaled_valid_df = scaled_valid_df.drop(['age', 'BMI', 'Delta_date'], axis=1)
-
-    return scaled_train_df, scaled_valid_df
-
-
-def scaling(train, valid, scaler):
-    age_train = train[['age']]
-    bmi_train = train[['BMI']]
-    date_train = train[['Delta_date']]
-
-    age_valid = valid[['age']]
-    bmi_valid = valid[['BMI']]
-    date_valid = valid[['Delta_date']]
-
-    age_scaler = scaler.fit(age_train)
-    bmi_scaler = scaler.fit(bmi_train)
-    date_scaler = scaler.fit(date_train)
-
-    label_1 = age_scaler.fit_transform(age_train)
-    label_2 = bmi_scaler.fit_transform(bmi_train)
-    label_3 = date_scaler.fit_transform(date_train)
-
-    label_4 = age_scaler.fit_transform(age_valid)
-    label_5 = bmi_scaler.fit_transform(bmi_valid)
-    label_6 = date_scaler.fit_transform(date_valid)
-
-    scaled_train = get_scaled_df(label_1, label_2, label_3)
-    scaled_valid = get_scaled_df(label_4, label_5, label_6)
-    return scaled_train, scaled_valid
-
-
-def get_scaled_df(value_1, value_2, value_3):
-    values = {'0':[], '1':[], '2':[]}
-    value_list = [value_1, value_2, value_3]
-    scaled_df = pd.DataFrame()
-
-    for j, f in enumerate(value_list):
-        for i in range(len(f)):
-            value = f[i][0]
-            if str(value) == 'nan':
-                values[str(j)].append(0.0)
-                continue
-            values[str(j)].append(value)
-    scaled_df['scaled_age'] = values['0']
-    scaled_df['scaled_BMI'] = values['1']
-    scaled_df['scaled_Delta_date'] = values['2']
-    return scaled_df
 
 if __name__ == '__main__':
     main()
